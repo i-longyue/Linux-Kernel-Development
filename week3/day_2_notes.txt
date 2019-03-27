@@ -1,0 +1,61 @@
+1.首先 repo sync拿到最新代码。
+注意：要在kernel目录进行配置
+make menuconfig图形化的内核配置 
+Y --将该功能编译进内核
+N --不将该功能编译进内核
+M --将该功能编译成可以在需要时动态插入到内核的模块
+
+
+1.device drvier
+	usb support
+{
+	*** miscellaneous USB options ***
+		OTG support...
+		...
+
+	*** USB Host Controller Driver ***
+
+	*** USB Device class Driver ***
+
+	*** USB Imaging device ***
+
+	*** platform Gule Driver support ***
+
+	*** USB port drviers *** *** USB Miscellaneous driver ***
+		-- USB Gadget Support -->
+			-- USB Webcam function
+
+			--
+}
+
+
+2.安装adb（解决adb devices错误）
+
+
+3.adb root 
+  adb remount
+
+  couldn't create file: Read-only file
+
+
+ 在Android6.0 （Android M）userdebug版本上(eng版本不存在该问题)，发现
+使用adb remount 系统之后，还是不能对system分区进行操作，提示没有写权限
+为只读文件系统Read-only file system
+解决方法如下:
+
+4.getprop，setprop。
+需要针对性的修改init.rk30board.usb.rc
+		init.usb.configfs.rc
+
+5.打补丁的使用
+git apply *.patch
+
+
+6.
+
+
+
+
+
+
+

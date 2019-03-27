@@ -1,0 +1,700 @@
+第6章  内核数据结构
+	本章将介绍几种Linux内核常用的内建数据结构.和其他很多大型项目一样,Linux内核实现了这些
+	通用数据结构,而且提供大家在开发时重用.内核开发者应该尽可能地使用这些数据结构,而不要搞
+	自己作主张的山寨方法.在下面的内容中,我们讲述了这些通用数据结构中是有用的几个:
+	*链表
+	*队列
+	*映射
+	*二叉树
+	本章最后还要讨论算法复杂度,以及何种规模的算法或数据结构结构可以相对地支持更大的输入集合.
+
+
+
+
+6.1 链表
+是一种存放操作可变数量元素(常称为节点)的数据结构.
+链表是Linux内核中最简单,最普通的数据结构.链表是一种存放和操作可变数量元素的数据结构.
+链表和静态数据的不同之处在于,它所包含的元素都是动态创建并插入链表的.在编译时不必知道
+具体需要创建多少个元素.
+另外也因为链表中每个元素的创建时间各不相同,所以它们在内存中无须占用连续内存区.
+
+正是因为元素不连续的存放,所以各元素需要通过某种方式连接在一起.
+于是每个元素都包含一个指向下一个元素的指针,
+	
+当有元素加入链表或从链表中删除元素时,简单的调整指向下一个元素的指针就可以了.
+
+
+6.1.1 单向链表和双向链表
+	可以用一种最简单的数据结构来表示这样一个链表:
+
+/* 一个链表中的一个元素 */
+struct list_element{
+	/* 有效数据 */
+	void *data;
+	/* 指向下一个元素的指针 */
+	struct list_element *next;
+};
+...|下一个---->   ...|下一个---->   ...|下一个---->   ...|下一个
+
+在有些链表中,每个元素还包含一个指向前一个元素的指针,因为它们可以同时向前向后相互连接,所以这种
+链表被称作双向链表.而类似图6-1所示那种只能向后连接的链表被称作单向链表.
+
+
+表示双向链表的一种数据结构如下:
+/* 一个链表中的一个元素 */
+struct list_element {
+
+	/* 有效数据 */
+	void *data;
+	struct list_element *next;
+	struct list_element *prev
+
+
+
+
+
+
+Linux内核实现方式与从不同,它不是将数据结构塞入链表,而是将链表节点塞入数据结构.
+1.链表数据结构
+链表代码在头文件<linux/list.h>中声明,其数据结构很简单:
+strutct list_head{
+	struct list_head *next;
+	struct list_head *prev;
+}
+
+
+next指针指向下一个链表节点,prev指针指向前一个.然而,似乎这里还看不出它们有多大的作用.
+到底什么才是链表存储的具体内容呢?
+关键在于理解list_head结构如何使用的
+
+
+struct fox{
+	unsigned long tail_length;
+	unsinged long weight;
+	bool          is_fantastic;
+	/* 所有的fox结构形成链表 */
+	struct         list_head list;
+}
+	上述结构中,fox中的list.next指向下一个元素,list.prev指向前一个元素.现在链表已经能用了,
+	但是显然还不够方便.因此内核又提供了一组链表操作例程.比如list_add()方法加入一个新节点
+	到链表中,但是,这些方法都有一个统一的特点:它们只接受list_head结构作为参数.使用宏container_of()
+	我们可以方便地从链表指针找到父结构中包含的任何变量.这是因为在c语言中,一个给定结构中的变量
+	偏移在编译地址就被ABIl固定下来了.
+
+
+#define offsetof(TYPE,MEMBER)   ((size_t) &((TYPE *)0)->MEMBER)
+#define container_of(PTR,TYPE,MEMBER)    ({  \
+		    const typeof(((TYPE *)0)->MEMBER) *__mptr=(PTR);  \
+		    (TYPE *) ((char *)__mptr - offsetof(TYPE,MEMBER)); })
+
+
+struct test
+{
+	int i;
+	int j;
+	char k;
+}
+struct test temp;
+现在呢?如果我想通过temp.j的地址找到temp的首地址,就可以使用下面的语句来实现:
+ container_of(&temp.j, struct test, j);
+
+ 我们知道container_of()的作用是通过一个结构变量中不念旧恶成员的地址找到这个结构变量的首地址
+		    const typeof(((TYPE *)0)->MEMBER) *__mptr=(PTR);  
+		    (TYPE *) ((char *)__mptr - offsetof(TYPE,MEMBER)); 
+
+	我们用上而的struct test展开一下:
+			const typeof(((struct test *)0)->j) * __mptr =(&temp.j)
+	其中,typeof是GNU C对标准C的扩展,它的作用是根据变量获取变量的类型,因此上述代码的作用首先
+	使用typeof获取结构体成员j的类型为int,然后定义一个int指针类型的临时变量__mptr,并将结构体
+	变量中成员的地址赋值给这个临时变量__mptr.
+
+
+	(struct test *)((char *)__mptr - offsetof(struct test,j));
+	接着我们来看一下offsetof(struct test ,j)
+#define offsetof(TYPE,MEMBER)   ((size_t) &((TYPE *)0)->MEMBER)
+
+	展开(size_t) &((struct test *)0)->j
+
+	k
+	j
+	i        0x00000000
+
+	其中size_t是整形,那么我们知道最终的结果是一个整形值,也就是j相对于0地址的偏移量
+
+
+	再回首一下它,就彻底明白了container_of()宏的实现原理了:
+	(struct test *)((char *)__mptr - offsetof(struct test,j));
+	是不是可以获得结构变量temp的首地址.
+
+	使用container_of()宏,我们定义一个简单的函数便可以返回包含list_head父类型结构体:
+#define list_entry(ptr, type, member)
+	container_of(ptr, type, member)
+
+2.定义一个链表
+正如看到的:list_head本身其实并没有意义----它需要被嵌入到你自己的数据结构中才能生效:
+struct fox {
+	unsigned long tail_length;
+	unsigned long weight;
+	bool		is_fantastic;
+	struct list_head list;
+}
+
+链表需要在使用前初始化,因为多数元素都是动态创建的(也许这就是需要链表的原因)
+因此最常见的方式是在运行时初始化链表.
+
+struct fox *red_fox;
+red_fox  = kmalloc(sizeof(*red_fox),GFP_KERNEL);
+red_fox->tail_length = 40;
+red_fox->weight = 6;
+red_fox->is_fantastic =false;
+INIT_LIST_HEAD(&red_fox->list);
+
+如果一个结构在编译期静态创建,而你需要在其中给出一个链的直接引用,下面是最简方式:
+struct fox_read_fox = {
+	.tail_length = 40,
+	.weight =6,
+	.list = LIST_HEAD_INIT(read_fox.list),
+};
+
+3.链表头
+前面我们展示了如何把一个现有的数据结构(这时是我们的fox结构体)改造成链表.
+简单修改上述代码,我们的结构便可以被内核链表例程管理.但是在可以使用这些
+例程前,需要一个标准的索引指针指向整个链表,即链表的头指针.
+
+内核链表实现中最杰出的特性就是:我们fox节点都是无差别的---------第一个都包含
+一个list_head指针,于是我们可以从任何一个节点遍历链表,而不从一个链表节点触发
+有趣的是,这个特殊的索引节点事实上也就是一个常规的list_head:
+	static LIST_HEAD(fox_list)
+	该定义并初始化了一个名为fox_list的链表例程,这些例程中的大多数都只接受
+	一个或者两个参数:头节点或者头节点加上一个特殊链表节点.下面我们就具体看看
+	这些操作例程.
+
+
+6.1.5  操作链表
+	内核提供了一组函数来操作链表,这些函数都要使用一个或多个list_head结构体指针
+	作参数.因为函数都是用C语言以内联函数形式实现的,所以它们的原型在文件<linux/list.h>
+	中.有趣的是,所有地这些函数的复杂度都为O(1)
+	比如无论这些函数操作的链表的大小,3个或者3000个从链表,从链表中删除一项或加入一项
+	花费的时间都是相同的这点可以没什么让人惊奇的,但你最大还是搞清楚其中的原因.
+
+
+1.向链表中增加一个节点
+	给链表拉架一个节点:
+	list_add(struct  list_head *new, struct list_head *head);
+	该函数向指定链表的head节点后插入节点,因为链表是循环的,而且通常没有首尾节点的概念,
+	所以你可以把任何一个节点当成head.如果把"最后"
+	一个节点当做head的话,那么该函数可以用来实现一个栈.
+	回到我们的例子,假定我们创建一个新的struct fox,并把它加入fox_list,那么我们这样做
+	list_add(&f->list, &fox_list);
+	把节点增加到链表尾
+	list_add_tail(struct list_head *new, struct list_head *head)
+	该函数向指定链表的head节点插入new节点.和list_add()函数类似
+
+
+
+2.从链表中删除一个节点
+
+list_del(struct list_head *entry)
+	该函数从链表中删除entry元素.注意,该操作并不会释放entry或释放包含entry的数据结构所
+占用的内存:该函数仅仅是将entry元素从链表中移走,所以该函数被调用后,通常还需要再撤销包含
+entry的数据结构和其中的entry项目
+
+
+
+例如,为了删除for节点,我们回到前面增加节点的foc_list
+
+list_del(&f->list)
+	注意,该函数并没有接受fox_list作为输入参数.它只接受一个特定的节点,并修改其前后节点的指针
+
+	static inline void __list_del(struct list_head *prev, struct list_head *next)
+{
+	next->prev = prev;
+	prev->next = next;
+}
+
+static inline void list_del(struct list_head *entry)
+{
+	__list_del(entry->prev, entry->next)
+}
+
+从链表中删除一个节点并对其重新初始化:
+list_del_init();
+list_del_init(struct list_head *entry)
+	该函数除了需要再次初始化entry以外,其他和list_del()函数类似.这样作是因为:
+	虽然链表不再见需要entry项,但是还可以再次使用包含entry的数据结构体.
+
+
+3.移动和合并链表节点
+把节点从一个链表移到另一个链表:
+list_move(struct list_head *list ,struct list_head *head)
+该函数从一个链表中移除list项,然后将其加入到另一链表中的head节点后.
+把节点从一个链表移到另一个链表的末尾:
+
+list_move_tail(struct list_head *list, struct list_head *head)
+该函数和list_move()函数一样,唯一不同的是将list项插入到head项前.
+
+
+
+检查链表是否为空:
+list_empty(struct list_head *head)
+如果指定的链表为空,该函数返回非0值;否则返回0.
+如两个未连接的链表合并在一起:
+list_splice(struct list_head *list, struct list_head *head)
+	该函数合并两个链表,它将list指向的链表插入到指定链表的head元素后面.
+	把两个未连接的链表全并在一起,并重新初始化原来的链表:
+	list_splice_init(struct list_head *list, struct list_head *head)
+
+该函数和list_splice()函数一样,唯一的不同是由list指向的链表要被重新初始化.
+
+节约两次提领(dereference)
+	如果你碰巧已经得到了next和prev指针,你可以直接调用内部链表函数,从而省下
+	一点时间(其实就是提领的时间).(获取指针地址或引用地址上的值)
+
+	前面讨论的所有函数其实没有做什么其他特别的操作,它
+	仅仅是找到next和prev指针,再去调用内部函数而已
+
+	内部函数和它们的外部包装函数同名,仅仅在前面加了两条下划线.
+	比如,可以调用__list_del(prev, next)函数代替调用list_del(list)函数.但这只有
+	在向前和向后指针确实已经被提领过的情况才有意义
+
+6.1.6 遍历链表
+	现在,你已经知道了如何在内核中声明,初始化,和操作一个链表.这很了不起,但如果无法访问
+	自己的数据,这些没有任何意义.链表仅仅是个能够包含重要数据的容器:我们必须利用链表移
+	并访问包含我们数据的结构体.
+	注意 和链表操作函数不同,遍历链表的复杂度为0(n),n是链表中所包含的元素数目
+
+	1.基本方法
+	使用list_for_ench()宏,该宏使用两个list_head类型的参数,第一个参数用来指向当前项,这是
+	一个你必须要提供的临时变量,第二个参数是你需要遍历链表的心以头节点形式存在的list_head
+	每次遍历中,第一个参数在链表中不断移动指向下一个元素,直到链表中的所有元素被访问为止.
+	struct list_head *p;
+	list_for_each(p, list){
+		/* p指向链表中的元素 */
+	}
+	好了,指向链表结构的指针通常是无用的;我们所需要的是一个指向包含list_head结构体的指针.
+	比如前面的fox结构体的例子,我们需要的是指向每个fox的指针,而不需要指向结构体中list成员
+	的指针.我们可以使用前面讨论的list_entry()宏,来获得包含给定list_head的数据结构.
+	struct list_head *p;
+	struct fox *f;
+	list_for_each(p, &fox_list){
+		f = list_entry(p, struct fox, list);
+	}
+
+	2.可用的方法
+	前面的方法虽然确实展示了list_head节点的功效,但并不优美,而且也不够灵活.所以多数内核代码
+	采用list_for_each_entry()宏遍历链表.该宏内核也使用list_entry()宏,但简化了遍历过程:
+	list_for_each_entry(pos, head, member)
+	这里的pos是一个指向包含list_head节点对象的指针,可将它看做成list_entry宏的返回值.
+	head是一个指向头节点的指针,即遍历开始位置
+
+	现在看看实际例子吧.它来自inotify------内核文件系统的更新通知机制
+
+	list_for_each_entry(watch , &inode->inotify_watches, i_list){
+		if(watch->ih == ih)
+			return watch;
+	}
+	return NULL;
+
+	该函数遍历了inode->inotify_watches链表中的所有项,每个项的类型都是struct inotify_watches
+	list_head在结构中被命令为i_list.循环中的每一个遍历,watch都指向链表的新节点.该函数的目的在
+	于:在inode结构中串联起来inotify_watches链表,搜寻基inotify_handle与所提供的柄相匹配的
+	inotify_watch项.
+
+	很多原因会需要反向遍历链表.其中一个是性能原因--如果你知道你要寻找的节点最可能在你搜索起始点
+	的前面
+
+	第二个原因,比如,如果你使用链表实现堆栈,那么你需要从尾部向前遍历才能达到LIFO原则
+	如果没有反向遍历的原因,就老实点用list_for_each_entry()宏吧.
+
+	你仍然需要锁定
+	list_for_each_entry()的安全版本只能保护你在循环体中从链表中删除数据.如果这时有可能从其他
+	地方并发进行删除,或者有任何其他并发的链表操作,你就需要锁链表
+	(请见第9章和10章中对同步和锁的讨论)
+
+
+5.其他链表方法
+	Linux提供了很多链表操作方法----几乎是你能想到的所有访问和操作链表方法,所有这些方法都是
+	在头文件<linux/list.h>中找到.
+
+
+6.2 队列
+	任何操作系统内核都少不了一种编程模型:生产者和消费者.在该模式中,生产者创造数据
+	(比如说需要读取的错误信息或者需要处理的网络包),而消费者则反过来,读取消息和处理包
+	或者以其他方式消费这些数据.实现模型的最简单的方式无非是使用队列,生产者将
+	数据推进队列,第一个进入队列的数据一定是第一个离开队列的.FIFO
+
+Linux内核通用队列实现称为Kfifo.它实现在文件kernel/kfifo.c中,声明在文件
+<linux/kfifo.h>本节讨论的是自2.6.33以后更新的API,使用方法和2.6.33前的内核稍有不同
+所以在使用前主仔细检查文件<linux/kfifo.h>.
+
+
+6.2.1 kfifo
+	Linux的kfifo和多数其他队列实现类似,提供两个主要操作:enqueue dequeue
+	kfifo对象维护了两个偏移量:入口偏移和出口偏移.
+	
+	入口偏移是指下一次入队列时的位置,出口偏移是指下一次出队列时的位置.`
+	出口偏移总是小于等待入口偏移,否则无意义,因为那样说明要出队列的元素根本还没有入队列
+
+	enqueue操作拷贝数据到队列中的入口偏移位置.当上述动作完成后,入口偏移随之加上推入的元素数目
+	.dequeue操作从队列中出口偏移处拷贝数据,当上述动作完成后,入口偏移随之加上推入的元素数目.
+	当出口偏移等于入口偏移时,说明队列空了:
+	在新数据推入前,不可再摘取任何数据了.当入口偏等于队列长度时,说明在队列重置前,不可再有
+	新数据推入队列.
+
+6.2.2 创建队列
+	使用kfifo前,首先必须对它进行定义和初始化.和多数内核对象一样,有动态或者静态方法供你选择.动态
+	方法更为普遍:
+	int kfifo_alloc(struct kfifo *fifo, unsigned int size, gfp_t gfp_mask);
+	该函数创建并且初始化一个大小为size的kfifo.
+	内核使用gfp_mask标识分配队列(我们在第12章会详细讨论内存分配).如果成功kfifo_alloc()返回0;错误
+	则返回一个负数错误码,下而便是一个例子.
+	struct kfifo fifo;
+	int ret;
+
+	ret = kfifo_alloc(&kifo, PAGE_SIZE, GFP_KERNEL);
+	if (ret)
+		return ret;
+		/* fifo现在代表一个大小为PAGE_SIZE的队列 */
+
+		你想要自己分配缓冲,可以调用:
+		void kfifo_init(struct kfifo *fifo, void *buffer, unsigend int size);
+		该函数创建并初始化一个kfifo对象,它使用buffer指向size字节大小的内存.对于kfifo_alloc()
+		和kfifo_init(),size必须是2的幂
+
+		静态声明kfifo更简单,但不大常用:
+		DECLARE_KFIFO(name, size);
+		INIT_KFIFO(name);
+		上述方法会创建一个名称为name,大小为size的kfifo对象.和前面一样,size必须是2的幂.
+
+6.2.3 推入队列数据
+	当你的kfifo对象创建和初始化后,推入数据到队列需要通过kfifo_in()方法完成:
+	unsigned int kfifo_in(struct kfifo *fifo, const void *from, unsigned int len );
+	该函数把from指针所指的len字节数据拷贝到fifo所指的队列中,如果成功,则返回推入数据
+	的字节大小.如果队列中的空闲小于len,则该函数值最多可拷贝队列可用空间那么多的数据,
+	这样的话,返回值可能小于len,甚至会返回,这时意味着没有任何数据推入.
+
+6.2.4 摘取队列数据
+	推入数据使用函数kfifo_in(),摘取数据则需要通过kfifo_out()完成.
+	unsigned int kfifo_out(struct kfifo *fifo, void *to, unsigned int len,
+			unsigned offset);
+
+	该函数从fifo所指向的队列中拷贝出长度为len字节的数据到to所指的缓冲中,如果成功
+	该函数则返回拷贝的数据长度.如果队列中数据大小小于len,则该函数拷贝出的数据必然
+	小于需要的数据大小.
+
+	当数据被摘取后,数据就不再存在于队列中.这是队列操作的常用方式,不过如果仅仅想"偷窥"
+	队列中的数据,而不想删除它,你可以使用kfifo_out_peek()方法:
+	unsigned int kfifo_out_peek(struct kfifo *fifo, void *to, unsigned int len,
+			unsigned offset)
+	该函数和kfifo_out()类似,但出口偏移不增加,而且摘取的数据仍然可被下次kfifo_out获得.
+	参数offset指向队列中的索引位置.如果该参数为0,则读出队列头.
+
+
+6.2.5 获取队列长度
+	若想获得用于存储kfifo队列的空间的总体大小(以字节大小为单位),可调用方法kfifo_size()
+	static inline unsigned int kfifo_size(struct kfifo *fifo);
+	static inline unsigned int kfifo_len(struct kfifo *fifo)
+
+	如果想得到kfifo队列中还有多少可用空间,则要调用方法;
+	static inline unsigned int kfifo_avail(struct kfifo *fifo);
+	最后两个方法是kfifo_is_empty()和kfifo_is_full().如果给定的kfifo分别是空或者满
+	它们返回非值,如果返回0,则相反.
+	static inline int kfifo_is_empty
+	static inline int kfifo_is_full
+
+
+
+6.2.6 重置和撤销队列
+	如果重置kfifo,意味着抛弃所有队列中内容,调用kfifo_reset():
+		static inline void kfifo_reset(struct kfifo *fifo);
+
+		撤销一个使用kfifo_alloc()分配的队列,调用kfifo_free():
+			void kfifo_free(struct kfifo *fifo);
+			如果你是使用kfifo_init()方法创建的队列,那么你需要负责释放相关的缓冲.
+			具体方法取决于你是如何创建它的.去看看第12章节关于动态分配和释放内存的讨论吧.
+
+
+6.2.7 队列使用举例
+	使用上述接口,我们看一个kfifo具体用例.假定我们创建一个由fifo指向的8KB大小的kfifo.我们
+	就可以推入数据队列.这个例子中,我们推入简单的整形数.在你自己的代码中,
+	可以推入更加复杂的任务相关数据.这里使用整数,我们看看kfifo如何工作:
+
+	unsigend int i;
+	/*将0,32压入到名为fifo'的kfifo中 */
+	for(i = 0; i < 32;i++)
+	kfifo_in(fifo, &i;sizeof(i));
+
+	名为fifo的kfifo现在包含了0到31的整数,我们查看一下队列的第一个元素是
+	不是0:
+	unsigned int val;
+	int ret
+	ret = kfifo_out_peek(fifo, &val, sizeof(val), 0);
+
+	名为fifo的kfifo现在包含了0到31的整数,我们查看一下队列的第一个元素是不是0:
+	unsigned int val;
+	int ret;
+	ret = kfifo_out_peek(fifo, &val, sizeof(val), 0);
+	if (ret != sizeof(val))
+	return -EINVAL;
+	printk(KERN_INFO "%u\n", val);
+
+	摘取并打印kfifo中所有元素,我们可以调用kfifo_out():
+
+	/* 当队列中还有数据时 */
+	while(kfifo_avail(fifo)) {
+		unsigned int val;
+		int ret;
+
+		/*...read it,one integer at a time */
+		ret = kfifo_out(fifo, &val, sizeof(val));
+		if(ret != sizeof(val))
+			return -EINVAL;
+
+		printk(KERN_INNFO "%u\n", val);
+		0到31的整数将一一按序打印出来
+
+
+6.3 映像
+	一个映射,也常称为关联数组,其实是一个组成的集合,而每个键必然关联一个特定的值.
+	这种键到值的关联关系称为映射.映射至少支持三个操作:
+
+	* Add (key, value)
+	* remove (key)
+	* value = Lookup (key)
+
+	虽然散列表是一种映射,但并非所有的映射都需要通过散列表实现.除了使用散列表外,映射也可以
+	通过自平衡二叉搜索存储数据.虽然散列表能提供更好的平均的渐近复杂度(请看本章后面关于算法
+	复杂度的讨论),但是二叉搜索树在最坏情况下能有更好的表现(即对数复杂性相比线性复杂性).
+	二叉树搜索树同时满足顺序保证,这将给用户的按序遍历带来很好的性能.
+	二叉搜索树的最后一个优势是它不需要散列函数,需要的键类型只要可以定义 <= 操作算子便可以了.
+
+
+	虽然键到值的映射属于一个通用说法,但是更多时候特指使用二叉树而非散列表实现的关联数组.比如,
+	C++的STL容器std::map便是采用自平衡二叉搜索树(或者类似的数据结构)实现的,它能提供按序遍历的能力
+
+	Linux内核提供了简单,有效的映射数据结构,但是它并非一个通用的映射.因为它的目标是
+	映射一个唯一的标识数(UID)到一个指针,除了提供三个标准的映射操作外,Linux还在add操作基础上
+	实现了allocate操作.这个allocate操作不但向map中加入键值对,而且还产生UID.
+
+	idr数据结构用于映射用户空间的UID到一个指针.除了提供三个标准的映射操作外.因为它的目标是:映射
+	一个唯一的标识数(UID)到一个指针.除了提供三个标准的映射操作外,Linux还在add操作基础上实现了
+	allocate操作.这allocate操作不但向map中加入了键值对,而且还可以产生UID.
+
+	id数据结构用于映射用户空间的UID,比如将inodify watch的描述符或者POSIX的定时器ID映射到
+	内核中相关联的数据结构上,如inotify_watch或者k_itimer结构体.其命名仍然沿袭了内核中有些
+	含混不清的命令体系,这个映射被命名为idr
+
+	6.3.1 初始化一个idr
+	建立一个idr很简单,首先你需要静态定义或者动态分配一个idr数据结构.然后调用idr_init()
+	void idr_init(struct idr *idp)
+
+	比如:
+	/* 静态定义idr */
+	struct  idr_id_huh;
+
+	/* 初始化idr结构 */
+	idr_init(&id_huh);
+
+6.3.2 分配一个新的UID
+ 一旦建立了idr,就可以分配新的UID了,这个过程分两步完成.第一步,告诉idr你需要分配新的UID
+ 允许其在必要时调整后备树的大小,然后,第二步才是真正请求新的UID.之所以需要这个组合动作是
+ 因为要允许调用初始大小----这中间涉及在无锁情况下分配内存的场景.我们在第12章将讨论内存
+ 分配,在第9章和第10章讨论加锁问题.现在我们先别管如何处理上锁问题,重点看看如何使用idr.
+	第一个调整后备树的大小的方法是idr_pre_get()
+	该函数将在需要时时行UID分配工作:调整由idp指向的idr的大小.
+	第二个函数,实际执行获取新的UID,并且将其加到idr的方法是idr_get_new();
+	该方法使用idp所指向的idr去分配一个新的UID,并且将关联到指针ptr上.成功时,
+		该方法返回0,并且将新的UID存于id.错误时
+
+	如果成功,上述代码获得一个新的UID,它被存储在整型变量id中,而且将UID映射到ptr
+	(我们没有在代码片段中定义它)
+	函数idr_get_new_above()使得调用者可指定一个最小的UID返回值:
+	int idr_get_new_above(struct idr *idp, void *ptr, int starting_id, int *id);
+	它确保新的UID大于等于starting_id外.使用这个变种方法允许idr的使用都确保UID不会被重用,
+	允许其值不但在当前分配的ID中唯一,而且还保证在系统的整个运行期间唯一.下面的代码片段
+	和前例中的类似,不过我们明确要求增加UID的值
+
+
+6.3.3 查找UID
+	当我们在一个idr中已经分配了一些UID时,我们自然就需要查找它们:调用都要给出UID
+	idr将返回对应的指针.查找步骤显然要比分配一个新UID要来的简单,仅需使用idr_find()方法即可.
+	void *idr_find(struct idr *idp, int id);
+
+	注意,如果你使用idr_get_new()或者idr_get_new_above()将空指针映射给UID,那么该函数在成功时
+	也返回NULL.这样你就无法区分是成功还是失败,所以,最好不好将UID映射到空指针上.
+	这个函数的使用比较简单:
+	struct my_struct *ptr = idr_find(&idr_huh, id);
+	if(!ptr)
+		return -EINVAL
+
+6.3.4  删除UID
+	从idr中删除UID使用方法idr_remove()
+	void idr_remove(struct idr *idp, int id)
+	如果idr_remove()成功,则将id关联的指针一起从映射中删除.
+	idr_remove()并没有办法提示任何错误
+	
+6.3.5 撤销idr
+	idr_destory()函数
+	如果该方法成功,则释放idr中未使用的内存,,它并不释放当前分配给UID使用的任何内存.
+	通常内核代码不会撤销idr,除非关闭或者..
+	而且只有在没有其他用户时才能删除,但是你可以调用idr_remove_all()方法强制删除所有的UID
+	
+	你应该首先对idp指向的idr调用idr_remove_all(),然后再调用idr_destroy(),这样就能使idr占用
+	的内存都被释放
+
+6.4 二叉树
+	树结构是一个能提供分层的树型数据结构的特定数据结构.在数学意义上,树是一个无环,连接的有向
+	图,其中任何一个顶点具0个或者多个出边及0个或者1个出边
+
+	一个二叉树是每个节点最多只有两个出边的树---也就是,一个树,其节点具有0个,1个或者2个子节点.
+
+6.4.1 二叉搜索树
+	一个二叉搜索树(BST) 是一个节点有序的二叉树,其顺序通常遵循下列法则:
+	*根的左分支节点值都小于根节点值.
+	*右分支节点的值都大于要根节点值.
+	*所有地的子树也都是二叉搜索树.
+
+	因此,一个二叉搜索树所有节点必然都有序,且左子节点小于其父节点值,而右子节点大于其父节点值的二叉树.所以.
+	在树中搜索一个给定值或者按序遍历树都相当快捷(算法分别是对数和线性的)
+
+	6.4.2 自平衡二叉搜索树
+	一个节点的深度是指从其根节点起,到达它一共需经过父节点数目.
+	
+	处于树底层的节点称为叶子节点.一个树的高度是指树中处于最底层节点的深度.
+
+	一个平衡二叉搜索树是一个所有叶子节点深度差不超过1的二叉搜索树.
+
+	一个自平衡二叉搜索树是指其操作都是试图维持(半)平衡的二叉搜索树.
+
+
+	1.红黑树
+	红黑树是一种自平衡二叉搜索树.Linux主要的平衡二叉树数据结构就是红黑树.红黑树具有特殊的着色属性,
+	或红色或黑.红黑树因遵循下面六个属性,所以能维持半平衡结构:
+		(1)所有的节点要么着红色,要么着黑色.
+		(2)叶子节点都是黑色
+		(3)叶子节点不包含数据.
+		(4)所有非叶子节点都有两个子节点.
+		(5)如果一个节点是红色,则它的子节点都是黑色.
+		(6)在一个节点到其叶子节点的路径中,如果总是包含同样的黑色节点,则该路径相比其他路径是短的.
+
+		上述条件保证了最深叶子节点的深度不会大于两倍的最浅叶子节点深度.所以,红黑树总是半平衡的
+		为什么它具有如此神奇的特点呢?
+		首先,第五个属性,一个红色节点不能是其他红色节点的子节点或父节点.
+		而第六个属性保证了,从树的任何节点到其叶子节点的路径都具有相同数目的黑色节点,树里的最长
+		路径则是红黑交替节点路径,所以最短路径必然是具有相同数目的黑色节点,树里的最长路径则是红黑
+		交替节点路径,所以最短路径必然是具有相同数量黑色节点的-----------只包含黑色节点的路径.
+		于是从根节点到叶子节点的最长路径不会超过最短路径的两倍.
+
+		如果插入和删除操作可以遵循上述六个要求,那这个树会始终保持是一个半平衡树.看起来也许有些奇怪,
+		为什么插入和删除动作都需要服从这些特别的约束,
+
+
+	2.rbtree
+		Linux实现红黑树称为rbtree.其定义在文件lib/rbtree.c中,声明在文件<linux/rbtree.h>中.除了一定的优化
+		外,Linux的rbtree类似于前面所描述的经典红黑树,我们要分配一个新的rb_root结构,并且需要初始化为特殊值RB_ROOT:
+		struct rb_root root = RB_ROOT;
+		树里的其他节点由结构rb_node描述.给定一个rb_node,我们可以通过跟踪同名节点指针来找到它的左右子节点.
+
+		rbtree的实现并没有提供搜索和插入例程,这些例程希望由rbtree的用户自己定义.这是因为C语言不在容易进行
+		泛型编程,同时Linux内核开发者们相信最有效的搜索和插入方法需要每个用户自己去实现.你可以使用rbtree提供
+		的辅助函数,但你自己要实现比较操作算子.
+
+		搜索操作和插入操作最好的范例就是展示一个实际场景:我们先来看搜索,下面的函数实现了在页高缓存中搜索一
+		个文件区.每个i节点都有自己的rbtree,以关联文件中的页偏移,该函数将搜索给定i节点的rbtree,以寻找匹配
+		的偏移值.
+
+		struct page * rb_search_page_cache(struct inode *inode, 
+				unsigned long offset)
+		{
+
+
+		
+		}
+	和探索操作一样,while循环需要遍历整个树,也是根据offset选择遍历方向.但是和搜索不同的是,该函数希望找
+	不到匹配的offset,因此它想要找的是最新offset要插入的叶子节点.当插入点找到后,调用rb_link_node()在给定
+	位置插入新节点.接着rb_insert_clolor()方法执行复杂的再平衡动作.如果页被加入页高速缓存中,则返回NULL.
+	如果页已经在高速缓存中了,则返回这个已经存在的页结构地址.
+
+
+
+6.5 数据结构以及选择
+	我们已经详细讨论了Linux中最重要的四种数据结构:链表,队列,映射和红黑树.
+	在本节中我们将教你如何在代码中具体选择使用哪种数据结构.
+	如果你对数据集合的主要操作是遍历数据,就使用链表.
+	事实上没有数据结构可以提供比线性算法复杂度更好的算法遍历元素,所以你应该用最简单的数据结构完成简单工作.
+	另外,当性能并非首要考虑因素时,或者当你需和内核中其他使用链表的代码交互时,也该优先选择链表.
+
+	如果你的代码符合生产者/消费者模式,则使用队列,特别是如果你想(或者可以)要一个定长缓冲.队列会使得添加和
+	删除项的工作简单有效.同时队列也提供了FIOF
+
+	如果你需要映射一个UID到一个对象,就使用映射.映射结构使得映射工作简单有效,而且映射可以帮你维护和分配UID
+
+
+	如果你要存储大量数据,并且检索迅速,那么红黑树最好.红黑树可以确保搜索时间复杂度是对数关系.
+
+	要是上述数据结构都不能满足你的需要,内核还实现了一些较少使用的数据结构,也许它们能帮你
+	比如基树(trie类型)和位图.只有当寻遍所有内核提供的数据结构都不能满足时,你才需要自己设计
+	数据结构.经常在独立的源文件中实现一种常见数据结构是散列表.
+
+
+
+6.6 算法复杂度
+
+6.6.1 算法
+	算法就是一系列的指令,它可能有一个或多个输入,最后产生一个结果或输出.
+	比如计算一个房间中人数的步骤就是一个算法,它的输入是输入,计算结果是输出.
+
+6.6.2 大o符号
+大o符号用来描述这种增长率.函数f(x)可写作o(g(x)),读为"f是g的大o"
+数学定义形式为:
+	如果f(x) 是O(g(x)))
+
+
+6.6.3 大符号
+
+
+
+
+6.6.4 时间复杂度
+	比如,再次考虑计算房间里的人数据,假设你一秒钟数一个人,那么如果有7个人在房间,你需要花7s显然
+	如果有n个人,需要花n称来数它们,我们称该算法复杂度为O(n),如果你要在房间所有人面前跳舞,因为
+	复杂度为O(1)...
+
+	我们不赞成使用复杂的算法,但是时刻要注意算法的负载和,不要为了你根本不需要的支持伸缩充要求.
+	盲目去优化算法.
+
+6.7 小结
+	本章我们讨论了许多Linux内核开发者用于实现进程调度到设备驱动等待内核代码的通过数据结构.
+	你会随着学习的深入.慢慢发现这些数据结构的妙用
+	我们也介绍了算法复杂度以及测量和标识算法复杂度的工具,其中最值得到注意的是大o.以及Linux内核
+	大O都是我们评价算法和内核组件在多用户处理器,进程,网络连接,以及其他环境下伸缩度的重要指标.
+
+
+	
+
+
+
+
+
+
+
+
+
+
+
+
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+

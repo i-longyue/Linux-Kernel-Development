@@ -1,0 +1,27 @@
+关于ADB工具的使用：
+
+
+1.adb工具的安装:
+主要是一个工具文件的使用
+1.adb root
+2.adb disable-verity
+关闭system分区的verity特性
+
+3.adb reboot
+重启
+
+4.adb root
+5.adb remount
+
+adb push xx xxx
+
+
+2.如何在linux中挂载共享文件夹
+	sudo mkdir /home/username/share 
+	sudo mount -t vboxsf longyao /mnt/longyao 
+
+3.
+
+
+
+
