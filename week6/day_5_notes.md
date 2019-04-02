@@ -190,8 +190,25 @@ MAINTAINERS文件列举了每个相关设备驱动和子系统单独信息----�
 	既可以满足你的好奇心，也可以帮助你开始学习内核。
 
 
+注意：用git diff查看，发现是，
+	$ git diff util/webkit/mkdist-webkit
+	diff --git a/util/webkit/mkdist-webkit b/util/webkit/mkdist-webkit
+	old mode 100755
+	new mode 100644
+	
+原来是msysgit在windows下需要为文件"仿造"访问权限。由于种种限制，信息不能复原
+从而导致原来的755成644了。
+
+解决方法：
+	git config --global core.filemode false
+	git config core.filemode false
 
 
+###
+```
+
+```
+###
 
 
 
