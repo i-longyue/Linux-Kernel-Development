@@ -11,13 +11,6 @@ DTS即Device Tree Source 设备树源码，Device Tree是一种描述硬件的�
 
 
 
-
-
-
-
-
-
-
 #2.DTS的描述信息
 Device Tree由一系列被命名的结点(node)和属性(property)组成,而结点本身可包含子
 结点。所谓属性，其实就是成对出现的name和value。在Device Tree中，可以描述的
