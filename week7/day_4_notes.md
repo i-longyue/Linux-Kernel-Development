@@ -35,7 +35,7 @@ USB设备在没有首先被主控制器询问时从不启动发送数据，这�
 |-- bNumConfigurations
 |-- bNumInterfaces
 |-- bcdDevice
-|-- bmAttributes
+|-- bmAttribute
 |-- detach_state
 |-- devnum
 |-- idProduct
