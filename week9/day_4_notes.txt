@@ -1,0 +1,68 @@
+linux获取设备树源文件(DTS)里的资源
+
+在linux使用platform_driver_register()注册platform_driver时，需要在
+platform_driver的probe()里面知道设备的中断号，内存地址等资源。
+
+这些资源的描述信息放在resource数据结构中，相同的资源存放一个树形数据结构中，
+通过父节点，兄弟节点，子节点相连。
+比如中断资源，IO端口端口资源，IO内存资源，DMA资源有不同的资源树。
+
+
+Linux使用struct resource来描述一个resource
+struct resource {
+  resource_size_t start;      ／／资源范围的开始
+  resource_size_t end;        ／／资源范围的结束
+  const char *name;		//资源拥有者名
+  unsigned long flags;	／／资源属性标识
+  struct resource *parent, *sibling, *child;   ／／资源树的父节点， 兄弟节点， 字节点指针
+};
+
+resource_size_t 由系统决定 为uint32_t 或uint64_t 。
+在platform机制里，使用platform_get_ersource()来获取指定的资源类型。
+
+比如获取想获取中断号
+irq = platform_get_irq(pdev,0);
+
+int platform_get_irq(struct platform_device *dev, unsigned int num) 
+{
+	    struct resource *r = platform_get_resource(dev, IORESOURCE_IRQ, num);
+		    return r ? r->start : -ENXIO;
+}
+
+platform_get_irq()会返回一个start,即可以用的中断号.之后使用request_irq()来注册
+中断服务函数
+		 
+		 
+
+
+再比如想要获取IO内存资源
+
+struct resource *res_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+即可以得到一个IO内存资源节点指针，包括了地址的开始，结束地址等，该IO内存的
+长度可以resource_size()来获取，
+但这段资源只是一个描述，想真正使用这段ID内存，还要经过先申请，再映射的过程。
+例如可使用devm_request_mem_region()申请出使用这段IO内存，再使用
+ioremap将其映射出来，供用户空间使用。
+
+devm_request_mem_region(&pdev->dev, res_mem->start, resource_size(res_mem),
+		                     res_mem->name))
+addr_start = ioremap(res_mem->start, resource_size(res_mem));
+ioremap() 的返回值即为该资源的虚拟地址。
+
+
+IO内存的资源是在设备树源文件里给出的。.dts文件就是用来描述目标板硬件信息的。
+在uboot启动后，使用uboot提供的特定API将其获取出来，如fdt_getprop(),
+	fdt_path_offset(),这些API包含在uboot的头文件<libfdt.h>里面。
+
+例如一个在.dts文件中关于gpio资源的描述：
+
+
+
+
+ gpio: gpio-controller@1070000000800 {
+             #gpio-cells = <2>;
+         compatible = "cavium,octeon-3860-gpio";
+         reg = <0x10700 0x00000800 0x0 0x100>;
+         pio-controller;
+ 根据其描述， 可知道gpio控制器的IO内存起始地址为：0x107900000800， 长度为0x100.
+ 即从 0x107900000800 到 0x1079000008ff.""
