@@ -1,0 +1,230 @@
+diff --git a/drivers/usb/dwc_otg_310/dwc_otg_driver.c b/drivers/usb/dwc_otg_310/dwc_otg_driver.c
+index 80585a7..eb1ab3e 100755
+--- a/drivers/usb/dwc_otg_310/dwc_otg_driver.c
++++ b/drivers/usb/dwc_otg_310/dwc_otg_driver.c
+@@ -1859,6 +1859,31 @@ void rk_usb_power_down(void)
+ 					       ((0x01 << 13) << 16),
+ 					       RK_GRF_VIRT +
+ 					       RK3288_GRF_UOC1_CON0);
++
++		/* longy add usb remote wakeup pro */
++		/* Enable USB line state interrupt, and then
++		 * we can detect remote wakeup signal while
++		 * usb phy is suspend and usb clk is disable.
++		 */
++		/* 打开USB线状态中断，检测远程唤醒信号，同时USB phy挂起，usb clk禁用 */
++			if ( pldata_otg->get_status(USB_REMOTE_WAKEUP)) {
++
++			/* OTG line state interrupt */
++
++			/* refer p216 1110
++			 * bit15: usbotg_linestate_irq_pd pending
++			 * bit14: usb otg line state interrupt enable 
++			 * bit13: OTG IDDQ test enable (powered dwon)
++			 * */
++			writel_relaxed(0xc000c000,
++					RK_GRF_VIRT + RK3288_GRF_UOC0_CON0);
++			/* HOST0 EHCI line state interrupt */
++			writel_relaxed(0xc000c000,
++					RK_GRF_VIRT + RK3288_GRF_UOC1_CON0);
++			/* HOST1 DWC_OTG line state interrupt */
++			writel_relaxed(0xc000c000,
++					RK_GRF_VIRT + RK3288_GRF_UOC2_CON0);
++			}
+ 		}
+ #endif
+ 	} else {
+diff --git a/drivers/usb/dwc_otg_310/usbdev_rk32.c b/drivers/usb/dwc_otg_310/usbdev_rk32.c
+index ba01039..36bf096 100644
+--- a/drivers/usb/dwc_otg_310/usbdev_rk32.c
++++ b/drivers/usb/dwc_otg_310/usbdev_rk32.c
+@@ -791,22 +791,50 @@ static irqreturn_t id_irq_handler(int irq, void *dev_id)
+ 	return IRQ_HANDLED;
+ }
+ 
+-#ifdef USB_LINESTATE_IRQ
++/* test longy */
++//#ifdef USB_LINESTATE_IRQ
+ /***** handler for usb line status change *****/
+-
+ static irqreturn_t line_irq_handler(int irq, void *dev_id)
+ {
+ 	/* clear irq */
++	struct dwc_otg_platform_data *pldata;
++
++	printk("^^^^^^^^^^^^^^^^line_irq_handler^^^^^^^^^^^^^^^^^^^\n");
+ 
++	/* clear irq and disable irq*/
+ 	printk("longy phy%s->%s\n",__FILE__, __func__);
++
++	/* refer p216 */
+ 	if (control_usb->grf_uoc0_base->CON0 & 1 << 15)
+-		control_usb->grf_uoc0_base->CON0 = (1 << 15 | 1 << 31);
++		control_usb->grf_uoc0_base->CON0 = 0xc0008000;
+ 
+ 	if (control_usb->grf_uoc1_base->CON0 & 1 << 15)
+-		control_usb->grf_uoc1_base->CON0 = (1 << 15 | 1 << 31);
++		control_usb->grf_uoc0_base->CON0 = 0xc0008000;
++
++	if (control_usb->grf_uoc2_base->CON0 & 1 << 15) {
++
++		control_usb->grf_uoc2_base->CON0 = 0xc0008000;
++		/* HOST1(DWC_OTG) phy is halt if detects
++		 * a remote wakeup signal.
++		 * first, do soft reset usb phy.
++		 * second, set usb phy into suspend mode
++		 * and normal mode once time.
++		 * OTG and HOST0(EHCI) do not need.*/
++		pldata = &usb20host_pdata_rk3288;
++
++		rk3288_cru_set_soft_reset(RK3288_SOFT_RST_USBHOST1PHY, true);
++		udelay(50);
++		rk3288_cru_set_soft_reset(RK3288_SOFT_RST_USBHOST1PHY, false);
++		udelay(50);
++
++		if (pldata) {
++			pldata->phy_suspend(pldata, USB_PHY_SUSPEND);
++			udelay(50);
++			pldata->phy_suspend(pldata, USB_PHY_ENABLED);
++			udelay(100);
++		}
+ 
+-	if (control_usb->grf_uoc2_base->CON0 & 1 << 15)
+-		control_usb->grf_uoc2_base->CON0 = (1 << 15 | 1 << 31);
++	}
+ 
+ 	if (control_usb->usb_irq_wakeup) {
+ 		wake_lock_timeout(&control_usb->usb_wakelock,
+@@ -817,7 +845,7 @@ static irqreturn_t line_irq_handler(int irq, void *dev_id)
+ 
+ 	return IRQ_HANDLED;
+ }
+-#endif
++//#endif
+ 
+ /************* register usb detection irqs **************/
+ static int otg_irq_detect_init(struct platform_device *pdev)
+@@ -827,6 +855,11 @@ static int otg_irq_detect_init(struct platform_device *pdev)
+ 
+ 	printk("longy phy%s->%s\n",__FILE__, __func__);
+ 
++	/* set linestate signal filter(滤波时间) time 500us */
++	/* refer datasheet p224 */
++	control_usb->grf_uoc0_base->CON4 = 0x00030001;
++
++
+ 	if (control_usb->usb_irq_wakeup) {
+ 		wake_lock_init(&control_usb->usb_wakelock, WAKE_LOCK_SUSPEND,
+ 			       "usb_detect");
+@@ -857,7 +890,7 @@ static int otg_irq_detect_init(struct platform_device *pdev)
+ 			control_usb->grf_uoc0_base->CON4 = 0x00f000f0;
+ 		}
+ 	}
+-#if 0
++//#if 0
+ 	/*register otg_linestate irq */
+ 	irq = platform_get_irq_byname(pdev, "otg_linestate");
+ 	if (irq > 0) {
+@@ -868,9 +901,13 @@ static int otg_irq_detect_init(struct platform_device *pdev)
+ 			dev_err(&pdev->dev, "request_irq %d failed!\n", irq);
+ 			return ret;
+ 		} else {
+-			control_usb->grf_uoc0_base->CON0 = 0xc000c000;
+-			if (control_usb->usb_irq_wakeup)
+-				enable_irq_wake(irq);
++
++//			control_usb->grf_uoc0_base->CON0 = 0xc000c000;
++//			if (control_usb->usb_irq_wakeup)
++//				enable_irq_wake(irq);
++			/* clear interrupt pending bit and disable irq
++			 * enable irq while system enter suspend */
++			control_usb->grf_uoc0_base->CON0 = 0xc0008000;
+ 		}
+ 	}
+ 
+@@ -884,9 +921,12 @@ static int otg_irq_detect_init(struct platform_device *pdev)
+ 			dev_err(&pdev->dev, "request_irq %d failed!\n", irq);
+ 			return ret;
+ 		} else {
+-			control_usb->grf_uoc1_base->CON0 = 0xc000c000;
+-			if (control_usb->usb_irq_wakeup)
+-				enable_irq_wake(irq);
++//			control_usb->grf_uoc1_base->CON0 = 0xc000c000;
++//			if (control_usb->usb_irq_wakeup)
++//				enable_irq_wake(irq);
++			/* clear interrupt pending bit and disable irq
++			 * enable irq while system enter suspend */
++			control_usb->grf_uoc1_base->CON0 = 0xc0008000;
+ 		}
+ 	}
+ 
+@@ -894,23 +934,27 @@ static int otg_irq_detect_init(struct platform_device *pdev)
+ 	irq = platform_get_irq_byname(pdev, "host1_linestate");
+ 	if (irq > 0) {
+ 		ret =
+-		    request_irq(irq, line_irq_handler, 0, "host1_linestate",
+-				NULL);
++			request_irq(irq, line_irq_handler, 0, "host1_linestate",
++					NULL);
+ 		if (ret < 0) {
+ 			dev_err(&pdev->dev, "request_irq %d failed!\n", irq);
+ 			return ret;
+ 		} else {
+-			control_usb->grf_uoc2_base->CON0 = 0xc000c000;
+-			if (control_usb->usb_irq_wakeup)
+-				enable_irq_wake(irq);
++//			control_usb->grf_uoc2_base->CON0 = 0xc000c000;
++//			if (control_usb->usb_irq_wakeup)
++//				enable_irq_wake(irq);
++			/* clear interrupt pending bit and disable irq
++			 * enable irq while system enter suspend */
++			control_usb->grf_uoc2_base->CON0 = 0xc0008000;
+ 		}
+ 	}
+-#endif
++	//#endif
+ 	return ret;
+ }
+ 
+ /********** end of rk3288 usb detections **********/
+ 
++/*  */
+ static int usb_grf_ioremap(struct platform_device *pdev)
+ {
+ 	int ret = 0;
+@@ -926,8 +970,10 @@ static int usb_grf_ioremap(struct platform_device *pdev)
+ 	void *grf_uoc4_base;
+ 
+ 	printk("longy phy%s->%s\n",__FILE__, __func__);
++	/* 通过名字获取资源 */
+ 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM,
+ 					   "GRF_SOC_STATUS1");
++
+ 	grf_soc_status1 = devm_ioremap_resource(&pdev->dev, res);
+ 	if (IS_ERR(grf_soc_status1)) {
+ 		ret = PTR_ERR(grf_soc_status1);
+@@ -1025,7 +1071,6 @@ static const struct of_device_id rk_usb_control_id_table[] = {
+ 
+ #endif
+ 
+-/*    */
+ static int rk_usb_control_probe(struct platform_device *pdev)
+ {
+ 	int gpio, err;
+@@ -1042,11 +1087,13 @@ static int rk_usb_control_probe(struct platform_device *pdev)
+ 	}
+ 
+ 	control_usb->chip_id = RK3288_USB_CTLR;
++	/* 用于查找空属性是否存在 */
+ 	control_usb->remote_wakeup = of_property_read_bool(np,
+ 							   "rockchip,remote_wakeup");
+ 	control_usb->usb_irq_wakeup = of_property_read_bool(np,
+ 							    "rockchip,usb_irq_wakeup");
+ 
++	/* 推迟一个电池检测detect work */
+ 	INIT_DELAYED_WORK(&control_usb->usb_charger_det_work,
+ 			  usb_battery_charger_detect_work);
+ 
+diff --git a/kernel.img b/kernel.img
+index de2e85b..d97590a 100644
+Binary files a/kernel.img and b/kernel.img differ
